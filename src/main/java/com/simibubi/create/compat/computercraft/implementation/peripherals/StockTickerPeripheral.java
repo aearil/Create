@@ -7,6 +7,8 @@ import com.simibubi.create.content.logistics.BigItemStack;
 import com.simibubi.create.compat.computercraft.implementation.ComputerUtil;
 import com.simibubi.create.content.logistics.packagerLink.LogisticallyLinkedBehaviour.RequestType;
 import com.simibubi.create.content.logistics.stockTicker.PackageOrder;
+import com.simibubi.create.content.logistics.stockTicker.PackageOrderWithCrafts;
+import com.simibubi.create.content.logistics.stockTicker.PackageOrderWithCrafts.CraftingEntry;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -14,6 +16,10 @@ import java.util.List;
 import java.util.ArrayList;
 
 import dan200.computercraft.api.lua.LuaFunction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ItemLike;
 import dan200.computercraft.api.lua.IArguments;
 import dan200.computercraft.api.lua.LuaException;
 import dan200.computercraft.api.detail.VanillaDetailRegistries;
@@ -129,6 +135,68 @@ public class StockTickerPeripheral extends SyncedPeripheral<StockTickerBlockEnti
 		 * address, false, new PackageOrder(stacks);
 		 */
 		return totalItemCount;
+	}
+
+	@LuaFunction(mainThread = true)
+	public final boolean request(IArguments arguments) throws LuaException {
+		String address = arguments.getString(0);
+		Map<?, ?> items = arguments.getTable(1);
+
+		List<BigItemStack> orderStacks = new ArrayList<>();
+
+		for (var itemData : items.values()) {
+			if (!(itemData instanceof Map)) {
+				throw new LuaException("Table or nil expected for each item entry");
+			}
+			Map<?, ?> itemDataMap = (Map<?, ?>) itemData;
+
+			String itemName = "minecraft:air";
+			if (itemDataMap.get("name") instanceof String) {
+				itemName = (String) itemDataMap.get("name");
+			}
+			int count = 1;
+			if (itemDataMap.get("count") instanceof Number) {
+				Object countObj = itemDataMap.get("count");
+				count = (countObj instanceof Number) ? ((Number) countObj).intValue() : 1;
+				if (count > 256)
+					throw new LuaException("Count for item " + itemName + " exceeds 256");
+			}
+
+			ResourceLocation resourceLocation = ResourceLocation.tryParse(itemName);
+			ItemLike item = BuiltInRegistries.ITEM.get(resourceLocation);
+
+			orderStacks.add(new BigItemStack(new ItemStack(item), count));
+		}
+
+		PackageOrder order = new PackageOrder(orderStacks);
+		return blockEntity.broadcastPackageRequest(RequestType.RESTOCK, order, null, address);
+	}
+
+	@LuaFunction(mainThread = true)
+	public final boolean requestCrafting(IArguments arguments) throws LuaException {
+		String address = arguments.getString(0);
+		int count = arguments.getInt(1);
+		Map<?, ?> recipe = arguments.getTable(2);
+
+		List<BigItemStack> orderStacks = new ArrayList<>();
+		List<BigItemStack> contextStacks = new ArrayList<>();
+
+		for (int i = 1; i <= 9; i++) {
+			var luaItemName = recipe.get((double) i);
+			String itemName = luaItemName != null ? luaItemName.toString() : "minecraft:air";
+
+			ResourceLocation resourceLocation = ResourceLocation.tryParse(itemName);
+			ItemLike item = BuiltInRegistries.ITEM.get(resourceLocation);
+
+			orderStacks.add(new BigItemStack(new ItemStack(item), count));
+			contextStacks.add(new BigItemStack(new ItemStack(item)));
+		}
+
+		PackageOrder order = new PackageOrder(orderStacks);
+		CraftingEntry orderContext = new CraftingEntry(new PackageOrder(contextStacks), count);
+
+		PackageOrderWithCrafts orderWithCrafts = new PackageOrderWithCrafts(order, List.of(orderContext));
+		return blockEntity.broadcastPackageRequest(RequestType.RESTOCK, orderWithCrafts, null, address);
 	}
 
 	@LuaFunction(mainThread = true)
